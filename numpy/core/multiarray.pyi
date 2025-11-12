@@ -417,6 +417,7 @@ def bincount(
     /,
     weights: None | ArrayLike = ...,
     minlength: SupportsIndex = ...,
+    weights2: None | ArrayLike = ...,
 ) -> NDArray[intp]: ...
 
 def copyto(
