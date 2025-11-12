@@ -890,9 +890,9 @@ def vdot(a, b):
 
 
 @array_function_from_c_func_and_dispatcher(_multiarray_umath.bincount)
-def bincount(x, weights=None, minlength=None):
+def bincount(x, weights=None, minlength=None, *, return_counts=False):
     """
-    bincount(x, /, weights=None, minlength=0)
+    bincount(x, /, weights=None, minlength=0, *, return_counts=False)
 
     Count number of occurrences of each value in array of non-negative ints.
 
@@ -910,10 +910,12 @@ def bincount(x, weights=None, minlength=None):
     x : array_like, 1 dimension, nonnegative ints
         Input array.
     weights : array_like, optional
-        Weights, array of the same shape as `x`.
+        Weights, array of the same shape as `x`. May be N-dimensional but the first dimension must
+        have the same length as `x`.
     minlength : int, optional
         A minimum number of bins for the output array.
-
+    return_counts : bool, optional
+        If True, also return the number of elements in each bin.
         .. versionadded:: 1.6.0
 
     Returns
@@ -921,6 +923,8 @@ def bincount(x, weights=None, minlength=None):
     out : ndarray of ints
         The result of binning the input array.
         The length of `out` is equal to ``np.amax(x)+1``.
+        If `return_counts` is False, returns the sum of weights per bin.
+        If True, returns a tuple `(counts, sums)`.
 
     Raises
     ------
@@ -962,6 +966,27 @@ def bincount(x, weights=None, minlength=None):
     >>> np.bincount(x,  weights=w)
     array([ 0.3,  0.7,  1.1])
 
+    If ``return_counts`` is True, the number of occurrences in each bin
+    is also returned:
+    >>> counts, sums = np.bincount(x, weights=w, return_counts=True)
+    >>> counts
+    array([1, 2, 3])
+    >>> sums
+    array([ 0.3,  0.7,  1.1])
+
+    If ``weights`` is multi-dimensional, the sum is performed over
+    the first dimension:
+    >>> w = np.array([[0.3, 1.0],
+    ...               [0.5, 0.9],
+    ...               [0.2, 0.8],
+    ...               [0.7, 0.7],
+    ...               [1.0, 0.6],
+    ...               [-0.6, 0.5]])
+    >>> x = np.array([0, 1, 1, 2, 2, 2])
+    >>> np.bincount(x, weights=w)
+    array([[ 0.3,  1. ],
+           [ 0.7,  1.7],
+           [ 1.1,  1.8]])   
     """
     return (x, weights)
 

@@ -113,11 +113,12 @@ NPY_NO_EXPORT PyObject *
 arr_bincount(PyObject *NPY_UNUSED(self), PyObject *const *args,
                             Py_ssize_t len_args, PyObject *kwnames)
 {
-    PyObject *list = NULL, *weight = Py_None, *mlength = NULL;
-    PyArrayObject *lst = NULL, *ans = NULL, *wts = NULL;
+    PyObject *list = NULL, *weight = Py_None, *mlength = NULL, *return_counts_obj = Py_False;
+    PyArrayObject *lst = NULL, *ans = NULL, *wts = NULL, *ans_counts = NULL;
     npy_intp *numbers, *ians, len, mx, mn, ans_size;
     npy_intp minlength = 0;
     npy_intp i;
+    int return_counts = 0;
     double *weights , *dans;
 
     NPY_PREPARE_ARGPARSER;
@@ -125,10 +126,11 @@ arr_bincount(PyObject *NPY_UNUSED(self), PyObject *const *args,
                 "list", NULL, &list,
                 "|weights", NULL, &weight,
                 "|minlength", NULL, &mlength,
+                "|return_counts", NULL, &return_counts_obj,
                 NULL, NULL, NULL) < 0) {
         return NULL;
     }
-
+    return_counts = PyObject_IsTrue(return_counts_obj);
     lst = (PyArrayObject *)PyArray_ContiguousFromAny(list, NPY_INTP, 1, 1);
     if (lst == NULL) {
         goto fail;
@@ -166,6 +168,13 @@ arr_bincount(PyObject *NPY_UNUSED(self), PyObject *const *args,
             goto fail;
         }
         Py_DECREF(lst);
+        if (return_counts) {
+            ans_counts = (PyArrayObject *)PyArray_ZEROS(1, &minlength, NPY_INTP, 0);
+            if (ans_counts == NULL){
+                goto fail;
+            }
+            return Py_BuildValue("NN", ans_counts, ans);
+        }
         return (PyObject *)ans;
     }
 
@@ -193,38 +202,92 @@ arr_bincount(PyObject *NPY_UNUSED(self), PyObject *const *args,
             ians[numbers[i]] += 1;
         NPY_END_ALLOW_THREADS;
         Py_DECREF(lst);
+        return (PyObject *)ans;
     }
-    else {
-        wts = (PyArrayObject *)PyArray_ContiguousFromAny(
-                                                weight, NPY_DOUBLE, 1, 1);
-        if (wts == NULL) {
+    /* --- Weighted case --- */
+    // Convert weights to contiguous array, any ndim >= 1
+    wts = (PyArrayObject *)PyArray_ContiguousFromAny(weight, NPY_DOUBLE, 1, NPY_MAXDIMS);
+    if (wts == NULL) {
+        goto fail;
+    }
+
+    npy_intp *w_shape = PyArray_SHAPE(wts);
+    int w_ndim = PyArray_NDIM(wts);
+    npy_intp n = w_shape[0];
+
+    if (n != len) {
+        PyErr_SetString(PyExc_ValueError,
+            "weights' first dimension must match the length of list");
+        goto fail;
+    }
+
+    // Determine output shape = (ans_size, w_shape[1], w_shape[2], ...)
+    npy_intp out_ndim = w_ndim;
+    npy_intp *out_shape = PyMem_New(npy_intp, out_ndim);
+    if (out_shape == NULL) {
+        PyErr_NoMemory();
+        goto fail;
+    }
+    out_shape[0] = ans_size;
+    for (int ax = 1; ax < w_ndim; ax++) {
+        out_shape[ax] = w_shape[ax];
+    }
+
+    // Allocate output
+    ans = (PyArrayObject *)PyArray_ZEROS(out_ndim, out_shape, NPY_DOUBLE, 0);
+    PyMem_Free(out_shape);
+    if (ans == NULL) {
+        goto fail;
+    }
+
+    double *w_data = (double *)PyArray_DATA(wts);
+    double *out_data = (double *)PyArray_DATA(ans);
+
+    // Compute stride sizes for copying slices
+    npy_intp inner_size = 1;
+    for (int ax = 1; ax < w_ndim; ax++) {
+        inner_size *= w_shape[ax];
+    }
+    if (return_counts) {
+        // Prepare counts array if needed
+        // (will be filled later)
+        ans_counts = (PyArrayObject *)PyArray_ZEROS(1, &ans_size, NPY_INTP, 0);
+        if (ans_counts == NULL) {
             goto fail;
         }
-        weights = (double *)PyArray_DATA(wts);
-        if (PyArray_SIZE(wts) != len) {
-            PyErr_SetString(PyExc_ValueError,
-                    "The weights and list don't have the same length.");
-            goto fail;
+        ians = (npy_intp *)PyArray_DATA(ans_counts);
+    }
+    // No counts needed, just sum weights
+    NPY_BEGIN_ALLOW_THREADS;
+    for (i = 0; i < len; i++) {
+        npy_intp idx = numbers[i];
+        double *dst = out_data + idx * inner_size;
+        double *src = w_data + i * inner_size;
+        if (return_counts) {
+            ians[idx] += 1;
         }
-        ans = (PyArrayObject *)PyArray_ZEROS(1, &ans_size, NPY_DOUBLE, 0);
-        if (ans == NULL) {
-            goto fail;
+        for (npy_intp j = 0; j < inner_size; j++) {
+            dst[j] += src[j];
         }
-        dans = (double *)PyArray_DATA(ans);
-        NPY_BEGIN_ALLOW_THREADS;
-        for (i = 0; i < len; i++) {
-            dans[numbers[i]] += weights[i];
-        }
-        NPY_END_ALLOW_THREADS;
-        Py_DECREF(lst);
-        Py_DECREF(wts);
+    }
+    NPY_END_ALLOW_THREADS;
+
+    Py_DECREF(lst);
+    Py_DECREF(wts);
+    if (return_counts) {
+        return Py_BuildValue("NN", ans_counts, ans);
     }
     return (PyObject *)ans;
+    
+    
+
+    
 
 fail:
     Py_XDECREF(lst);
     Py_XDECREF(wts);
     Py_XDECREF(ans);
+    Py_XDECREF(ans_counts);
     return NULL;
 }
 
