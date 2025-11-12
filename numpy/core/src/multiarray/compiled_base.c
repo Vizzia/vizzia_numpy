@@ -113,11 +113,12 @@ NPY_NO_EXPORT PyObject *
 arr_bincount(PyObject *NPY_UNUSED(self), PyObject *const *args,
                             Py_ssize_t len_args, PyObject *kwnames)
 {
-    PyObject *list = NULL, *weight = Py_None, *mlength = NULL;
-    PyArrayObject *lst = NULL, *ans = NULL, *wts = NULL;
+    PyObject *list = NULL, *weight = Py_None, *mlength = NULL, *return_counts_obj = Py_False;
+    PyArrayObject *lst = NULL, *ans = NULL, *wts = NULL , *ans_counts = NULL;
     npy_intp *numbers, *ians, len, mx, mn, ans_size;
     npy_intp minlength = 0;
     npy_intp i;
+    int return_counts = 0;
     double *weights , *dans;
 
     NPY_PREPARE_ARGPARSER;
@@ -125,10 +126,11 @@ arr_bincount(PyObject *NPY_UNUSED(self), PyObject *const *args,
                 "list", NULL, &list,
                 "|weights", NULL, &weight,
                 "|minlength", NULL, &mlength,
+                "|return_counts", NULL, &return_counts_obj,
                 NULL, NULL, NULL) < 0) {
         return NULL;
     }
-
+    return_counts = PyObject_IsTrue(return_counts_obj);
     lst = (PyArrayObject *)PyArray_ContiguousFromAny(list, NPY_INTP, 1, 1);
     if (lst == NULL) {
         goto fail;
@@ -166,6 +168,13 @@ arr_bincount(PyObject *NPY_UNUSED(self), PyObject *const *args,
             goto fail;
         }
         Py_DECREF(lst);
+        if (return_counts) {
+            ans_counts = (PyArrayObject *)PyArray_ZEROS(1, &minlength, NPY_INTP, 0);
+            if (ans_counts == NULL){
+                goto fail;
+            }
+            return Py_BuildValue("NN", ans_counts, ans);
+        }
         return (PyObject *)ans;
     }
 
@@ -210,14 +219,27 @@ arr_bincount(PyObject *NPY_UNUSED(self), PyObject *const *args,
         if (ans == NULL) {
             goto fail;
         }
+        if (return_counts) {
+            ans_counts = (PyArrayObject *)PyArray_ZEROS(1, &ans_size, NPY_INTP, 0);
+            if (ans_counts == NULL){
+                goto fail;
+            }
+            ians = (npy_intp *)PyArray_DATA(ans_counts);
+        }
         dans = (double *)PyArray_DATA(ans);
         NPY_BEGIN_ALLOW_THREADS;
         for (i = 0; i < len; i++) {
             dans[numbers[i]] += weights[i];
+            if (return_counts) {
+                ians[numbers[i]] += 1;
+            }
         }
         NPY_END_ALLOW_THREADS;
         Py_DECREF(lst);
         Py_DECREF(wts);
+    }
+    if (return_counts) {
+        return Py_BuildValue("NN", ans_counts, ans);
     }
     return (PyObject *)ans;
 
@@ -225,6 +247,7 @@ fail:
     Py_XDECREF(lst);
     Py_XDECREF(wts);
     Py_XDECREF(ans);
+    Py_XDECREF(ans_counts);
     return NULL;
 }
 
